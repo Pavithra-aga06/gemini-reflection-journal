@@ -101,6 +101,7 @@ async function startServer() {
         mode = "reflect", // 'reflect' | 'summarize' | 'brainstorm' | 'chat'
         history = [],
         title = "",
+        location = null,
       } = data;
 
       if (!prompt && (!history || history.length === 0)) {
@@ -142,13 +143,24 @@ async function startServer() {
         }
       }
 
-      // Append current user prompt if provided
+      // Append current user prompt if provided with metadata (title, location context)
       if (prompt) {
+        let contextualPrefix = "";
+        if (title) {
+          contextualPrefix += `[Journal Title: ${title.slice(0, 150)}]\n`;
+        }
+        if (location && typeof location === "object") {
+          const locName = location.placeName || location.formattedAddress || `${location.latitude}, ${location.longitude}`;
+          // Sanitize location context (max 120 chars, treat purely as passive context)
+          const sanitizedLoc = String(locName).slice(0, 120).replace(/[\r\n]+/g, " ");
+          contextualPrefix += `[Journal Location Context: ${sanitizedLoc}]\n`;
+        }
+
         contents.push({
           role: "user",
           parts: [
             {
-              text: title ? `[Journal Title: ${title}]\n\n${prompt}` : prompt,
+              text: contextualPrefix ? `${contextualPrefix}\n${prompt}` : prompt,
             },
           ],
         });
@@ -167,6 +179,138 @@ async function startServer() {
       console.error("[API Error /api/gemini/reflect]:", error);
       res.status(500).json({
         error: error?.message || "Failed to process reflection with Gemini AI.",
+      });
+    }
+  });
+
+  // 4. Secure Server-Side Location Reverse Geocoding Route
+  // Protects API keys from client exposure and validates all geographic coordinates
+  app.post("/api/location/reverse-geocode", async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const lat = Number(body.latitude);
+      const lng = Number(body.longitude);
+
+      // Strict Input Validation: latitude [-90, 90], longitude [-180, 180]
+      if (
+        isNaN(lat) ||
+        isNaN(lng) ||
+        lat < -90 ||
+        lat > 90 ||
+        lng < -180 ||
+        lng > 180
+      ) {
+        res.status(400).json({
+          error: "Invalid coordinates. Latitude must be between -90 and 90, and longitude between -180 and 180.",
+        });
+        return;
+      }
+
+      const googleMapsApiKey = process.env.GOOGLE_MAPS_API_KEY;
+      let placeName = `Coordinates: ${lat.toFixed(4)}°, ${lng.toFixed(4)}°`;
+      let formattedAddress = `Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)}`;
+      let city = "";
+      let country = "";
+
+      // Check for Google Maps Platform Geocoding API if key is provisioned
+      if (googleMapsApiKey) {
+        try {
+          const gmapsUrl = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${encodeURIComponent(
+            lat
+          )},${encodeURIComponent(lng)}&key=${encodeURIComponent(googleMapsApiKey)}`;
+          const gmapsRes = await fetch(gmapsUrl, { signal: AbortSignal.timeout(5000) });
+          if (gmapsRes.ok) {
+            const data: any = await gmapsRes.json();
+            if (data.status === "OK" && Array.isArray(data.results) && data.results.length > 0) {
+              const bestResult = data.results[0];
+              formattedAddress = bestResult.formatted_address || formattedAddress;
+
+              // Parse address components
+              const components = Array.isArray(bestResult.address_components)
+                ? bestResult.address_components
+                : [];
+              let localityComp = "";
+              let adminAreaComp = "";
+              let countryComp = "";
+
+              for (const comp of components) {
+                const types = comp.types || [];
+                if (types.includes("locality") || types.includes("postal_town")) {
+                  localityComp = comp.long_name;
+                } else if (types.includes("administrative_area_level_1")) {
+                  adminAreaComp = comp.short_name || comp.long_name;
+                } else if (types.includes("country")) {
+                  countryComp = comp.long_name;
+                }
+              }
+
+              city = localityComp;
+              country = countryComp;
+              if (localityComp && adminAreaComp) {
+                placeName = `${localityComp}, ${adminAreaComp}`;
+              } else if (localityComp && countryComp) {
+                placeName = `${localityComp}, ${countryComp}`;
+              } else if (countryComp) {
+                placeName = countryComp;
+              } else {
+                placeName = formattedAddress.split(",")[0] || formattedAddress;
+              }
+            }
+          }
+        } catch (gmapsErr) {
+          console.warn("[Google Maps Geocoding API Notice]: Could not reach Google Maps API, using fallback resolver.", gmapsErr);
+        }
+      }
+
+      // If Google Maps API key was not configured or didn't resolve placeName, try public reverse geocoding fallback
+      if (placeName.startsWith("Coordinates:")) {
+        try {
+          const fallbackUrl = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`;
+          const fallbackRes = await fetch(fallbackUrl, {
+            headers: {
+              "User-Agent": "GeminiReflectionJournal/1.0",
+              Accept: "application/json",
+            },
+            signal: AbortSignal.timeout(4000),
+          });
+
+          if (fallbackRes.ok) {
+            const data: any = await fallbackRes.json();
+            if (data && data.address) {
+              const addr = data.address;
+              city = addr.city || addr.town || addr.village || addr.suburb || "";
+              country = addr.country || "";
+              const state = addr.state || "";
+
+              if (city && state) {
+                placeName = `${city}, ${state}`;
+              } else if (city && country) {
+                placeName = `${city}, ${country}`;
+              } else if (country) {
+                placeName = country;
+              }
+
+              formattedAddress = data.display_name || formattedAddress;
+            }
+          }
+        } catch (fallbackErr) {
+          // Gracefully retain coordinate fallback
+        }
+      }
+
+      res.json({
+        latitude: lat,
+        longitude: lng,
+        placeName: placeName.slice(0, 100),
+        formattedAddress: formattedAddress.slice(0, 200),
+        city: city.slice(0, 60),
+        country: country.slice(0, 60),
+        attachedAt: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      console.error("[API Error /api/location/reverse-geocode]:", err);
+      res.status(500).json({
+        error: "Failed to reverse geocode coordinates safely.",
       });
     }
   });

@@ -8,7 +8,8 @@ import {
   Sparkles, 
   ChevronRight, 
   FileText,
-  Clock
+  Clock,
+  MapPin
 } from 'lucide-react';
 
 interface EntryHistoryProps {
@@ -146,6 +147,13 @@ export const EntryHistory: React.FC<EntryHistoryProps> = ({
                 <p className="text-xs text-stone-500 line-clamp-2 mt-1 leading-relaxed">
                   {previewText || 'Empty entry'}
                 </p>
+
+                {entry.location && (
+                  <div className="flex items-center gap-1 mt-1.5 text-[10px] text-emerald-800 bg-emerald-50/80 border border-emerald-200/50 px-2 py-0.5 rounded-md w-fit max-w-full">
+                    <MapPin className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
+                    <span className="truncate">{entry.location.placeName || entry.location.city || 'Location attached'}</span>
+                  </div>
+                )}
 
                 <div className="flex items-center justify-between mt-2.5 pt-1 text-[11px] text-stone-400">
                   <span className="flex items-center gap-1">

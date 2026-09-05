@@ -8,6 +8,16 @@ export interface ChatMessage {
   modelUsed?: string;
 }
 
+export interface JournalLocation {
+  latitude: number;
+  longitude: number;
+  placeName?: string;
+  formattedAddress?: string;
+  city?: string;
+  country?: string;
+  attachedAt: string;
+}
+
 export interface JournalInteraction {
   id: string;
   userId: string;
@@ -15,6 +25,7 @@ export interface JournalInteraction {
   summary?: string;
   mode: AIMode;
   messages: ChatMessage[];
+  location?: JournalLocation;
   createdAt: string;
   updatedAt: string;
   tags?: string[];

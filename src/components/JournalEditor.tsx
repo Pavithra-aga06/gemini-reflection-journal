@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { JournalInteraction, ChatMessage, AIMode } from '../types';
+import { JournalInteraction, ChatMessage, AIMode, JournalLocation } from '../types';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { LocationModal } from './LocationModal';
+import { LocationCard } from './LocationCard';
 import { 
   Sparkles, 
   Send, 
@@ -12,7 +14,8 @@ import {
   Bot,
   User as UserIcon,
   HelpCircle,
-  Clock
+  Clock,
+  MapPin
 } from 'lucide-react';
 
 interface JournalEditorProps {
@@ -42,6 +45,7 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
   const [mode, setMode] = useState<AIMode>(currentEntry.mode || 'reflect');
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
+  const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -58,6 +62,24 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [currentEntry.messages.length, isGenerating]);
+
+  const handleLocationAttached = async (loc: JournalLocation) => {
+    const updated: JournalInteraction = {
+      ...currentEntry,
+      location: loc,
+      updatedAt: new Date().toISOString(),
+    };
+    await onSaveEntry(updated);
+  };
+
+  const handleRemoveLocation = async () => {
+    const updated: JournalInteraction = {
+      ...currentEntry,
+      location: undefined,
+      updatedAt: new Date().toISOString(),
+    };
+    await onSaveEntry(updated);
+  };
 
   // Handle submitting reflection to Gemini API & Firestore
   const handleSendMessage = async (customPrompt?: string) => {
@@ -92,7 +114,7 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
     };
 
     try {
-      // Call server-side Express Gemini endpoint
+      // Call server-side Express Gemini endpoint (with sanitized location metadata)
       const response = await fetch('/api/gemini/reflect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -100,6 +122,7 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
           prompt: promptToSend,
           mode,
           title: updatedTitle,
+          location: currentEntry.location || null,
           history: currentEntry.messages.map((m) => ({
             role: m.role,
             text: m.text,
@@ -222,6 +245,32 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
           </button>
         </div>
 
+        {/* Location Trigger Button (if not already attached) */}
+        {!currentEntry.location ? (
+          <button
+            id="open-location-modal-button"
+            type="button"
+            onClick={() => setIsLocationModalOpen(true)}
+            className="px-2.5 py-1 text-xs font-medium text-stone-600 hover:text-stone-900 bg-stone-100 hover:bg-stone-200/80 rounded-lg transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+            title="Attach a location to this reflection"
+          >
+            <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+            <span className="hidden sm:inline">Attach Location</span>
+            <span className="sm:hidden">Location</span>
+          </button>
+        ) : (
+          <button
+            id="edit-location-modal-button"
+            type="button"
+            onClick={() => setIsLocationModalOpen(true)}
+            className="px-2.5 py-1 text-xs font-medium text-emerald-800 bg-emerald-100/80 hover:bg-emerald-200/80 rounded-lg transition flex items-center gap-1.5 cursor-pointer shadow-2xs truncate max-w-[160px]"
+            title="Edit attached location"
+          >
+            <MapPin className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+            <span className="truncate">{currentEntry.location.placeName || 'Location'}</span>
+          </button>
+        )}
+
         {/* Firestore Sync Badge */}
         <div className="flex items-center text-xs">
           {saveStatus === 'saving' || isSaving ? (
@@ -239,6 +288,17 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
           )}
         </div>
       </div>
+
+      {/* Attached Location Banner & Interactive Map Viewer */}
+      {currentEntry.location && (
+        <div className="px-4 sm:px-6 py-2.5 bg-emerald-50/40 border-b border-emerald-100/80">
+          <LocationCard
+            location={currentEntry.location}
+            onRemoveLocation={handleRemoveLocation}
+            onEditLocation={() => setIsLocationModalOpen(true)}
+          />
+        </div>
+      )}
 
       {/* Messages Thread Container */}
       <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 space-y-6">
@@ -424,6 +484,14 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Location Modal with User Permission and Consent Handling */}
+      <LocationModal
+        isOpen={isLocationModalOpen}
+        onClose={() => setIsLocationModalOpen(false)}
+        onLocationAttached={handleLocationAttached}
+        existingLocation={currentEntry.location}
+      />
     </div>
   );
 };
